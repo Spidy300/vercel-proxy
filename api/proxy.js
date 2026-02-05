@@ -1,18 +1,9 @@
+here is my api full code    // Vercel-specific proxy for HLS streaming
+// This runs on Vercel's infrastructure which is NOT blocked by CDN
+
 import axios from 'axios';
 
 export default async function handler(req, res) {
-    // ======== CORS HEADERS - SET AT THE BEGINNING ========
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept, Accept-Encoding');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Cache-Control');
-    res.setHeader('Access-Control-Max-Age', '86400');
-
-    // Handle preflight requests immediately
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
     // Only allow GET requests
     if (req.method !== 'GET') {
         return res.status(405).json({ error: 'Method not allowed' });
@@ -28,29 +19,13 @@ export default async function handler(req, res) {
         const decodedUrl = decodeURIComponent(url);
         const rangeHeader = req.headers['range'];
 
-        // Build request headers - MORE COMPREHENSIVE
+        // Build request headers
         const headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': referer ? decodeURIComponent(referer) : 'https://megacloud.tv',
+            'Origin': referer ? decodeURIComponent(referer) : 'https://megacloud.tv',
             'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'cross-site'
         };
-
-        // Add referer and origin if provided
-        if (referer) {
-            const decodedReferer = decodeURIComponent(referer);
-            headers['Referer'] = decodedReferer;
-            headers['Origin'] = new URL(decodedReferer).origin;
-        } else {
-            headers['Referer'] = 'https://megacloud.tv';
-            headers['Origin'] = 'https://megacloud.tv';
-        }
 
         // Forward range header if present
         if (rangeHeader) {
@@ -67,6 +42,12 @@ export default async function handler(req, res) {
             maxRedirects: 5,
             timeout: 30000,
         });
+
+        // Set CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept, Accept-Encoding');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Cache-Control');
 
         // Forward content type
         const contentType = response.headers['content-type'] || 'application/vnd.apple.mpegurl';
@@ -92,15 +73,10 @@ export default async function handler(req, res) {
             res.setHeader('Cache-Control', 'no-cache');
         }
 
-        // Handle M3U8 playlist - rewrite URLs to go through THIS PROXY
+        // Handle M3U8 playlist - rewrite URLs to go through proxy
         if (contentType.includes('mpegurl') || decodedUrl.endsWith('.m3u8')) {
             const content = Buffer.from(response.data).toString('utf-8');
             const basePath = decodedUrl.substring(0, decodedUrl.lastIndexOf('/') + 1);
-            
-            // Get current proxy base URL
-            const host = req.headers['x-forwarded-host'] || req.headers.host;
-            const protocol = req.headers['x-forwarded-proto'] || 'https';
-            const proxyBase = `${protocol}://${host}`;
 
             const lines = content.split('\n');
             const newLines = lines.map(line => {
@@ -112,10 +88,10 @@ export default async function handler(req, res) {
                     targetUrl = basePath + line;
                 }
 
-                // ✅ FIXED: Use CURRENT proxy URL, not hardcoded one
+                // Encode and proxy
                 const encodedUrl = encodeURIComponent(targetUrl);
                 const encodedReferer = encodeURIComponent(referer || 'https://megacloud.tv');
-                return `${proxyBase}/api/proxy?url=${encodedUrl}&referer=${encodedReferer}`;
+                return `https://vercel-proxy-umber-one.vercel.app/api/proxy?url=${encodedUrl}&referer=${encodedReferer}`;
             });
 
             const newContent = newLines.join('\n');
@@ -127,8 +103,6 @@ export default async function handler(req, res) {
 
     } catch (error) {
         console.error('Proxy error:', error.message);
-        
-        // Still return CORS headers even on error
         if (error.response) {
             return res.status(error.response.status).json({ 
                 error: 'Upstream error',
